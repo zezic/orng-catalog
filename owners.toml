@@ -1,0 +1,24 @@
+# Who may change what.
+#
+# GitHub has no path-scoped write permission, so nobody has write access here.
+# Every change arrives as a fork pull request, and a required check compares the
+# paths it touches against this file to decide whether its author may.
+#
+# Two things about this file are load-bearing:
+#
+#   - The check reads it from the base branch, never from the pull request.
+#     Otherwise a contributor could add themselves as owner of someone else's
+#     directory in the same commit that edits it.
+#   - `id` is what the check compares, not `github`. A login can be changed by
+#     its holder, and the freed name can then be claimed by somebody else, who
+#     would inherit write access to these directories. A numeric account id is
+#     immutable and is never reused. The login is here so a human reading this
+#     file knows who it is.
+#
+# The key is a catalog author id: lowercase, hyphen-separated, and the directory
+# name under content/. It is a lookup key and never a credential.
+#
+# Only maintainers can change this file; a pull request that touches it is
+# refused by the same check.
+
+caviio = { github = "j4n1k1", id = 97474499 }

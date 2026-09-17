@@ -1,0 +1,6 @@
+version    = "1.0.0"
+author     = "caviio"
+# Pending: to be replaced with the licence Caviio chooses. Until then this item
+# states no terms, which is a placeholder and not a grant.
+license    = "TBA"
+min_bitwig = "6.1"
