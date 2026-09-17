@@ -33,11 +33,7 @@ env:
   # Pinned on purpose. The rules that gate merges must not change silently under
   # the repository, so moving to a newer validator is a visible commit bumping
   # this line and nothing else.
-  #
-  # PLACEHOLDER: this commit predates `index --from-git`, which `publish.yml`
-  # needs. Bump all three workflows to the commit that adds it, once that is
-  # pushed to zezic/orng-tools.
-  LINT_REV: 380849340c6f494540db8ef38d5b414e2397c6df
+  LINT_REV: 28dc368c366a4599c87f24d0c77c4a10291180e4
   LINT_REPO: https://github.com/zezic/orng-tools
 
 jobs:
