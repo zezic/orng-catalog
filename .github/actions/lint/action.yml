@@ -25,7 +25,7 @@ runs:
   steps:
     - name: Look for a validator already built at this revision
       id: cache
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.cargo/bin/orng-catalog-lint
         # Keyed on the revision, so bumping the pin is what invalidates it.
