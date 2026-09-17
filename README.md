@@ -1,12 +1,12 @@
-# Orng Catalog
+# ORNG Catalog
 
 Community content for Bitwig Studio - devices, modulators and Grid modules -
-that [Orng Registry](https://github.com/zezic/orng-tools) installs from.
+that [ORNG Registry](https://github.com/zezic/orng-tools) installs from.
 
 **This is not a file host.** An item is twenty to thirty kilobytes; the entire
 Bitwig factory device set is 4.7 MB. Hosting is a non-problem.
 
-Orng Catalog is an **identity authority**. Its job is to guarantee that a UUID
+ORNG Catalog is an **identity authority**. Its job is to guarantee that a UUID
 means one thing, permanently, across contributors who do not know each other.
 Every rule below follows from that, and from one fact about Bitwig: a project
 stores a device's identity and its parameter values, while the structure comes
