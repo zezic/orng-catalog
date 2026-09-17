@@ -1,0 +1,130 @@
+# Let an author land their own content without waiting for a human.
+#
+# This is the one workflow here that holds a write token, so what it does *not*
+# do is the important part:
+#
+#   - It never checks out the pull request. It checks out this repository's
+#     master, and runs the validator from a pinned revision of another
+#     repository. No code from a fork is executed, at any point.
+#   - It believes nothing the pull request's own workflow produced. `Pull
+#     request` runs on the fork's head, so a contributor can rewrite it - that
+#     is normal for `pull_request` and harmless only because its token is
+#     read-only and nothing downstream trusts its output. So this workflow
+#     re-runs the ownership check itself, against the owners file on master and
+#     the changed paths as the API reports them.
+#   - It enables auto-merge and nothing else. GitHub still holds the pull
+#     request until the required checks pass, so this widens who can merge, not
+#     what merges.
+#
+# A `workflow_run` trigger is what makes that possible: it fires after the pull
+# request's checks finish, but runs in the base repository's context.
+
+name: Auto-merge
+
+on:
+  workflow_run:
+    workflows: [Pull request]
+    types: [completed]
+
+permissions:
+  contents: read
+
+env:
+  # Pinned on purpose. The rules that gate merges must not change silently under
+  # the repository, so moving to a newer validator is a visible commit bumping
+  # this line and nothing else.
+  #
+  # PLACEHOLDER: this commit predates `index --from-git`, which `publish.yml`
+  # needs. Bump all three workflows to the commit that adds it, once that is
+  # pushed to zezic/orng-tools.
+  LINT_REV: 380849340c6f494540db8ef38d5b414e2397c6df
+  LINT_REPO: https://github.com/zezic/orng-tools
+
+jobs:
+  consider:
+    name: Consider for auto-merge
+    # Only once everything the contribution had to pass has passed.
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out master, never the pull request
+        uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - uses: ./.github/actions/lint
+        with:
+          rev: ${{ env.LINT_REV }}
+          repo: ${{ env.LINT_REPO }}
+
+      - name: Find the pull request this run belongs to
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          # GitHub's own value for the commit that was tested, not anything the
+          # run wrote down. `workflow_run.pull_requests` is empty for forks,
+          # which is why this goes via the commit.
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          number=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" \
+            --jq '[.[] | select(.state == "open" and .base.ref == "master")][0].number // empty')
+          if [ -z "$number" ]; then
+            echo "::notice::no open pull request against master for $HEAD_SHA"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+
+      - name: Decide, from master's owners file and the API's file list
+        id: verdict
+        if: steps.pr.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          actor=$(gh api "repos/$REPO/pulls/$NUMBER" --jq '.user.id')
+
+          # Both sides of a rename: `filename` is where a file ended up, and
+          # `previous_filename` is the directory it was taken out of, which has
+          # to be owned just as much.
+          gh api "repos/$REPO/pulls/$NUMBER/files" --paginate \
+            --jq '.[] | .filename, (.previous_filename // empty)' \
+            | sort -u > "$RUNNER_TEMP/changed.txt"
+          echo "Paths:"
+          cat "$RUNNER_TEMP/changed.txt"
+
+          set +e
+          mapfile -t paths < "$RUNNER_TEMP/changed.txt"
+          orng-catalog-lint owners \
+            --owners owners.toml \
+            --actor-id "$actor" \
+            "${paths[@]}"
+          verdict=$?
+          set -e
+
+          # Only an author changing what they already own lands by itself. A new
+          # directory never can, which is also exactly when a first contribution
+          # deserves a pair of eyes.
+          case "$verdict" in
+            0) echo "auto=true" >> "$GITHUB_OUTPUT" ;;
+            3) echo "auto=false" >> "$GITHUB_OUTPUT"
+               echo "::notice::new author: leaving this for a maintainer" ;;
+            *) echo "auto=false" >> "$GITHUB_OUTPUT"
+               echo "::warning::ownership re-check did not agree; not auto-merging" ;;
+          esac
+
+      - name: Enable auto-merge
+        if: steps.verdict.outputs.auto == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          # Squash, so that one merged contribution is one commit on master and
+          # `git log -1 --first-parent` over an item's directory names it.
+          gh pr merge --auto --squash --repo "${{ github.repository }}" "$NUMBER"

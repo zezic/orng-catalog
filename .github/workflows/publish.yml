@@ -1,0 +1,91 @@
+# Regenerate the index on merge, and publish it.
+#
+# This is the only moment the index can be complete. Each row names the change
+# that published its item, and that commit does not exist while the contribution
+# is still a pull request - so the index is built here, from history, rather than
+# committed by the contributor who could not have known it.
+#
+# The application fetches one URL and then documents by path: plain HTTPS, no
+# API, no token, no account, no git client. Every row carries a digest and a
+# size, so a download is checked against a reviewed index rather than trusted for
+# arriving from the right domain.
+
+name: Publish
+
+on:
+  push:
+    branches: [master]
+    # A push that only rewrites the index must not regenerate the index.
+    paths-ignore:
+      - index.json
+
+permissions:
+  contents: read
+
+env:
+  # Pinned on purpose. The rules that gate merges must not change silently under
+  # the repository, so moving to a newer validator is a visible commit bumping
+  # this line and nothing else.
+  #
+  # PLACEHOLDER: this commit predates `index --from-git`, which `publish.yml`
+  # needs. Bump all three workflows to the commit that adds it, once that is
+  # pushed to zezic/orng-tools.
+  LINT_REV: 380849340c6f494540db8ef38d5b414e2397c6df
+  LINT_REPO: https://github.com/zezic/orng-tools
+
+jobs:
+  publish:
+    name: Regenerate and publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Whole history: the per-item revisions are read out of it.
+          fetch-depth: 0
+
+      - uses: ./.github/actions/lint
+        with:
+          rev: ${{ env.LINT_REV }}
+          repo: ${{ env.LINT_REPO }}
+
+      - name: Check the tree before publishing anything from it
+        run: orng-catalog-lint check --root .
+
+      - name: Build the index
+        run: |
+          # --from-git reads HEAD for the file's own revision, and for each item
+          # `git log -1 --first-parent` over its directory. --first-parent is
+          # what makes that the merging commit rather than the contributor's own
+          # commit from inside their branch, which nobody reviewed.
+          orng-catalog-lint index --root . --from-git --out index.json
+          cat index.json
+
+      - name: Commit it back if it moved
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet -- index.json; then
+            echo "::notice::the index is unchanged"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.json
+          git commit -m "Regenerate the index for ${GITHUB_SHA:0:7}"
+          git push origin HEAD:master
+
+      - name: Publish it as a release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A release per merge, so `releases/latest/download/index.json` is a
+          # stable URL whose contents are always tied to one reviewed commit.
+          # Updating a single rolling release in place would give the same URL
+          # and lose that.
+          tag="index-${GITHUB_SHA:0:7}"
+          gh release create "$tag" index.json \
+            --title "Index at ${GITHUB_SHA:0:7}" \
+            --notes "Generated from ${GITHUB_SHA}." \
+            --latest

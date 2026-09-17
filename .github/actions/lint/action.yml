@@ -1,0 +1,43 @@
+# The validator, at the revision the caller pinned.
+#
+# The repository and the application share one implementation of what a valid
+# item is, so the thing that gates a merge here is the same code that installs
+# from the catalog later. They cannot disagree.
+#
+# Caching the built binary rather than the registry and target directory means a
+# hit skips compilation outright. A cold build is around 34 crates - seconds on a
+# developer machine, well under a minute on a runner - so a miss costs little
+# and release artifacts are not worth the machinery yet.
+
+name: Validator
+description: Install the pinned orng-catalog-lint, from cache when there is one
+
+inputs:
+  rev:
+    description: Commit of orng-tools to build the validator from
+    required: true
+  repo:
+    description: Repository to build it from
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Look for a validator already built at this revision
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/bin/orng-catalog-lint
+        # Keyed on the revision, so bumping the pin is what invalidates it.
+        key: orng-catalog-lint-${{ runner.os }}-${{ inputs.rev }}
+
+    - name: Build it
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        cargo install --git "${{ inputs.repo }}" --rev "${{ inputs.rev }}" \
+          --locked orng-catalog-lint
+
+    - name: Report which one is running
+      shell: bash
+      run: orng-catalog-lint --version

@@ -1,0 +1,150 @@
+# What a contribution has to pass.
+#
+# Runs on `pull_request`, which means: the fork's head, a read-only token, and
+# no secrets. Nothing here needs any of those. It is also why this workflow
+# cannot enable auto-merge or apply a label - that is `auto-merge.yml`, which
+# runs afterwards in this repository's own context and never touches fork code.
+#
+# The order is deliberate. Ownership is checked first because it is the common
+# rejection and the cheap one: it reads a TOML file and compares a number, while
+# validation parses every document in the tree.
+
+name: Pull request
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+env:
+  # Pinned on purpose. The rules that gate merges must not change silently under
+  # the repository, so moving to a newer validator is a visible commit bumping
+  # this line and nothing else.
+  #
+  # PLACEHOLDER: this commit predates `index --from-git`, which `publish.yml`
+  # needs. Bump all three workflows to the commit that adds it, once that is
+  # pushed to zezic/orng-tools.
+  LINT_REV: 380849340c6f494540db8ef38d5b414e2397c6df
+  LINT_REPO: https://github.com/zezic/orng-tools
+
+jobs:
+  ownership:
+    name: Ownership
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the pull request
+        uses: actions/checkout@v4
+        with:
+          # Both endpoints of the change, so the diff below can be taken
+          # locally rather than through the API.
+          fetch-depth: 0
+
+      - uses: ./.github/actions/lint
+        with:
+          rev: ${{ env.LINT_REV }}
+          repo: ${{ env.LINT_REPO }}
+
+      - name: Take the owners file from the base branch
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # Never the pull request's copy. A contributor who could be checked
+          # against their own owners file would simply add themselves to it in
+          # the commit under review.
+          git show "$BASE_SHA:owners.toml" > "$RUNNER_TEMP/base-owners.toml"
+
+      - name: List the paths this pull request touches
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # --no-renames so a move shows up as a delete and an add. Both sides
+          # have to be owned: renaming a directory out of someone else's tree is
+          # as much a change to it as editing a file in it.
+          git -c core.quotePath=false diff --no-renames --name-only \
+            "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
+          echo "Paths:"
+          cat "$RUNNER_TEMP/changed.txt"
+          test -s "$RUNNER_TEMP/changed.txt" || {
+            echo "::error::this pull request changes nothing"
+            exit 1
+          }
+
+      - name: Decide whether this account may change them
+        env:
+          # Numeric, never the login. A login can be changed by its holder and
+          # the freed name claimed by somebody else; an account id cannot.
+          ACTOR_ID: ${{ github.event.pull_request.user.id }}
+        run: |
+          set +e
+          mapfile -t paths < "$RUNNER_TEMP/changed.txt"
+          orng-catalog-lint owners \
+            --owners "$RUNNER_TEMP/base-owners.toml" \
+            --actor-id "$ACTOR_ID" \
+            "${paths[@]}" | tee "$RUNNER_TEMP/verdict.txt"
+          verdict=${PIPESTATUS[0]}
+          set -e
+
+          # These four are the lint's interface, not an afterthought of it.
+          case "$verdict" in
+            0)
+              echo "### Owner update" >> "$GITHUB_STEP_SUMMARY"
+              echo "Account \`$ACTOR_ID\` owns every path in this change." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            3)
+              echo "### New author - a maintainer has to look" >> "$GITHUB_STEP_SUMMARY"
+              cat "$RUNNER_TEMP/verdict.txt" >> "$GITHUB_STEP_SUMMARY"
+              echo >> "$GITHUB_STEP_SUMMARY"
+              echo "Nothing owns these directories yet, so this cannot merge on its own." \
+                >> "$GITHUB_STEP_SUMMARY"
+              echo "::notice::new author: this pull request will not auto-merge"
+              ;;
+            1)
+              echo "::error::refused: this account does not own every path it changes"
+              exit 1
+              ;;
+            *)
+              echo "::error::the ownership check could not run"
+              exit 1
+              ;;
+          esac
+
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/lint
+        with:
+          rev: ${{ env.LINT_REV }}
+          repo: ${{ env.LINT_REPO }}
+
+      - name: Fetch the last published index
+        id: published
+        run: |
+          # Permanence is a promise about what was published, so the comparison
+          # is against the released index and not against what master says now.
+          # A catalog that has never published has no history to break, and the
+          # check is vacuously clean without it.
+          url=https://github.com/${{ github.repository }}/releases/latest/download/index.json
+          if curl -fsSL --retry 3 -o "$RUNNER_TEMP/published.json" "$url"; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no published index yet; only the internal rules will run"
+          fi
+
+      - name: Check the tree
+        run: |
+          # No --from-git: the commit that merges this contribution does not
+          # exist yet, and an index built here is only being validated, not
+          # published.
+          if [ "${{ steps.published.outputs.found }}" = "true" ]; then
+            orng-catalog-lint check --root . --against "$RUNNER_TEMP/published.json"
+          else
+            orng-catalog-lint check --root .
+          fi
