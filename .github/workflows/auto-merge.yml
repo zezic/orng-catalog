@@ -33,7 +33,7 @@ env:
   # Pinned on purpose. The rules that gate merges must not change silently under
   # the repository, so moving to a newer validator is a visible commit bumping
   # this line and nothing else.
-  LINT_REV: 28dc368c366a4599c87f24d0c77c4a10291180e4
+  LINT_REV: 99ab4767a518b3a1a369a23cf8b8489b651ab6f8
   LINT_REPO: https://github.com/zezic/orng-tools
 
 jobs:

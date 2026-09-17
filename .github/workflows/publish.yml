@@ -26,7 +26,7 @@ env:
   # Pinned on purpose. The rules that gate merges must not change silently under
   # the repository, so moving to a newer validator is a visible commit bumping
   # this line and nothing else.
-  LINT_REV: 28dc368c366a4599c87f24d0c77c4a10291180e4
+  LINT_REV: 99ab4767a518b3a1a369a23cf8b8489b651ab6f8
   LINT_REPO: https://github.com/zezic/orng-tools
 
 jobs:
@@ -72,6 +72,29 @@ jobs:
           git commit -m "Regenerate the index for ${GITHUB_SHA:0:7}"
           git push origin HEAD:master
 
+      - name: Sign it
+        # The key exists only here. Nothing that can run a contributor's code
+        # may name this secret, which is why signing lives in the workflow that
+        # runs after a merge and not in the one that checks a pull request.
+        env:
+          ORNG_CATALOG_SIGNING_KEY: ${{ secrets.ORNG_CATALOG_SIGNING_KEY }}
+        run: |
+          # Signs the file on disk rather than regenerating it. The published
+          # index carries the revisions git gave it a moment ago, and a file
+          # "like" it is a file that will not verify. Nothing may rewrite
+          # index.json from here to the upload - one added newline is enough.
+          orng-catalog-lint sign --index index.json --out index.json.sig
+
+      - name: Check what is about to be published
+        run: |
+          # The same call the application makes, against the key this
+          # repository says it expects. A key rotated in one place and not the
+          # other fails the release here rather than failing every user.
+          orng-catalog-lint verify \
+            --index index.json \
+            --signature index.json.sig \
+            --public-key "${{ vars.ORNG_CATALOG_PUBLIC_KEY }}"
+
       - name: Publish it as a release asset
         env:
           GH_TOKEN: ${{ github.token }}
@@ -81,7 +104,9 @@ jobs:
           # Updating a single rolling release in place would give the same URL
           # and lose that.
           tag="index-${GITHUB_SHA:0:7}"
-          gh release create "$tag" index.json \
+          # Both assets in one release. An index published beside last week's
+          # signature is a release nobody can install from.
+          gh release create "$tag" index.json index.json.sig \
             --title "Index at ${GITHUB_SHA:0:7}" \
-            --notes "Generated from ${GITHUB_SHA}." \
+            --notes "Generated from ${GITHUB_SHA}. Signed; verify against the published key." \
             --latest

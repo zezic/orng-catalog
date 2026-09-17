@@ -131,12 +131,24 @@ committed. Until these are applied, this repository only looks guarded.
       Maintainers, and the Actions bot for `index.json`, are the only bypass.
 - [ ] **Confirm the bypass list** lets `github-actions[bot]` push `index.json`
       to `master`, or `publish.yml` will fail at its commit step.
-- [ ] **Bump `LINT_REV`** in all three workflows. It currently holds a
-      placeholder that predates `index --from-git`, which `publish.yml` needs,
-      so publishing will fail until it points at a commit of `zezic/orng-tools`
-      that has it. It is pinned on purpose: the rules that gate merges must not
-      change silently under the repository, so moving to a newer validator is a
-      visible commit bumping that line.
+- [ ] **Make the signing key, on a machine you trust, and never in CI:**
+      `orng-catalog-lint keygen`. Put the secret half in
+      **Settings > Secrets and variables > Actions > Secrets** as a
+      *repository* secret named `ORNG_CATALOG_SIGNING_KEY`. Not an organisation
+      secret: only this repository's publish workflow may ever see it.
+- [ ] **Put the public half in the same screen under *Variables*,** named
+      `ORNG_CATALOG_PUBLIC_KEY`. It is public by definition, and a workflow that
+      states which key it expects turns a half-finished rotation into a failed
+      release rather than a failure for every user.
+- [ ] **Do both of those before pushing a `publish.yml` that signs.** The
+      workflow runs on merge to `master`; if the secret is not there yet the
+      run fails at the signing step. An unused secret, on the other hand, does
+      nothing at all - so adding it early is free and adding it late is not.
+- [ ] **Check `LINT_REV`** in all three workflows points at a commit of
+      `zezic/orng-tools` that has been pushed and that carries the commands
+      those workflows call. It is pinned on purpose: the rules that gate merges
+      must not change silently under the repository, so moving to a newer
+      validator is a visible commit bumping that line.
 
 Verify the result by opening a pull request from a throwaway account that owns
 nothing. It should be refused by `Ownership`, not merged and not left green.
@@ -149,6 +161,11 @@ fetches one stable URL:
 ```
 https://github.com/zezic/orng-catalog/releases/latest/download/index.json
 ```
+
+Beside it, `index.json.sig` - an ed25519 signature over exactly those bytes.
+The application verifies before it parses, against a key compiled into it, so
+whoever serves the index cannot choose what it says. That is what makes a mirror
+safe to add: a mirror can be wrong, but it cannot be believed.
 
 A release per merge, rather than one rolling release updated in place, so that
 what the URL serves is always tied to a single reviewed commit.
